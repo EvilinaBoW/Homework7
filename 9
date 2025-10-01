@@ -1,0 +1,166 @@
+USE master;
+GO
+
+ALTER DATABASE FilmStudio SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('FilmStudio') IS NOT NULL
+    DROP DATABASE FilmStudio;
+GO
+
+CREATE DATABASE FilmStudio;
+GO
+
+USE FilmStudio;
+GO
+
+IF OBJECT_ID('SceneActors', 'U') IS NOT NULL DROP TABLE SceneActors;
+IF OBJECT_ID('FilmActors', 'U') IS NOT NULL DROP TABLE FilmActors;
+IF OBJECT_ID('Scenes', 'U') IS NOT NULL DROP TABLE Scenes;
+IF OBJECT_ID('Crew', 'U') IS NOT NULL DROP TABLE Crew;
+IF OBJECT_ID('Actors', 'U') IS NOT NULL DROP TABLE Actors;
+IF OBJECT_ID('Films', 'U') IS NOT NULL DROP TABLE Films;
+GO
+
+CREATE TABLE Films (
+    film_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(200) NOT NULL,
+    genre NVARCHAR(100) NOT NULL,
+    release_year INT NOT NULL,
+    budget DECIMAL(18, 2) NOT NULL CHECK (budget > 0)
+);
+GO
+
+CREATE TABLE Actors (
+    actor_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    country NVARCHAR(100) NOT NULL,
+    birth_date DATE NOT NULL
+);
+GO
+
+CREATE TABLE Crew (
+    crew_id INT IDENTITY(1,1) PRIMARY KEY,
+    position NVARCHAR(100) NOT NULL,
+    full_name NVARCHAR(150) NOT NULL,
+    experience_years INT NOT NULL CHECK (experience_years >= 0)
+);
+GO
+
+CREATE TABLE Scenes (
+    scene_id INT IDENTITY(1,1) PRIMARY KEY,
+    film_id INT NOT NULL,
+    scene_number INT NOT NULL,
+    description NVARCHAR(500) NOT NULL,
+    duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
+    FOREIGN KEY (film_id) REFERENCES Films(film_id)
+);
+GO
+
+-- Связь многие ко многим между фильмами и актерами
+CREATE TABLE FilmActors (
+    film_id INT NOT NULL,
+    actor_id INT NOT NULL,
+    PRIMARY KEY (film_id, actor_id),
+    FOREIGN KEY (film_id) REFERENCES Films(film_id),
+    FOREIGN KEY (actor_id) REFERENCES Actors(actor_id)
+);
+GO
+
+-- Проверка участия актера в конкретной сцене — связь many-to-many сцен и актеров
+CREATE TABLE SceneActors (
+    scene_id INT NOT NULL,
+    actor_id INT NOT NULL,
+    PRIMARY KEY (scene_id, actor_id),
+    FOREIGN KEY (scene_id) REFERENCES Scenes(scene_id),
+    FOREIGN KEY (actor_id) REFERENCES Actors(actor_id)
+);
+GO
+
+-- Триггер для проверки, что актер участвует в фильме, к которому относится сцена, при добавлении в SceneActors
+CREATE TRIGGER trg_CheckActorInFilm
+ON SceneActors
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN Scenes s ON i.scene_id = s.scene_id
+        LEFT JOIN FilmActors fa ON s.film_id = fa.film_id AND i.actor_id = fa.actor_id
+        WHERE fa.actor_id IS NULL
+    )
+    BEGIN
+        RAISERROR('Актер не участвует в фильме, к которому принадлежит сцена!', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END;
+
+    INSERT INTO SceneActors(scene_id, actor_id)
+    SELECT scene_id, actor_id FROM inserted;
+END;
+GO
+
+-- Пример данных
+
+INSERT INTO Films (name, genre, release_year, budget) VALUES
+(N'Забавные игры', N'Драма', 2007, 1500000),      
+(N'Субмарина', N'Драма', 2010, 5000000),           
+(N'Мечтатели', N'Драма', 2003, 8000000),         
+(N'Господин Никто', N'Комедия', 2009, 12000000);   
+
+-- Вставляем новых актёров (реальные актёры из этих фильмов)
+INSERT INTO Actors (full_name, country, birth_date) VALUES
+(N'Майкл Питт', N'США', '1985-05-15'),     -- Забавные игры (главная роль)
+(N'Ноа Тейлор', N'Великобритания', '1991-02-18'), -- Субмарина (главная роль)
+(N'Ева Грин', N'Франция', '1976-08-22'),      -- Мечтатели (главная героиня)
+(N'Джаред Лето', N'США', '1963-11-10');     -- Господин Никто (главная роль)
+
+-- Вставляем новую съёмочную группу (реальные ключевые люди)
+INSERT INTO Crew (position, full_name, experience_years) VALUES
+(N'Режиссёр', N'Михаэль Ханеке', 38),                   -- Забавные игры 
+(N'Режиссёр', N'Ричард Айоади', 20),               -- Субмарина
+(N'Режиссёр', N'Кристин Жан', 25),                 -- Мечтатели
+(N'Режиссёр', N'Жан-Франсуа Леви', 30);             -- Господин Никто
+
+-- Вставляем сцены (по одной на фильм — для примера)
+INSERT INTO Scenes (film_id, scene_number, description, duration_minutes) VALUES
+(1, 1, N'Попытка побега из дома и первое убийство', 12),
+(2, 1, N'Главный герой впервые встречает девушку на крыше', 8),
+(3, 1, N'Танец на сцене в парижском театре', 10),
+(4, 1, N'Главный герой впервые говорит: "Я — никто"', 7);
+
+-- Привязываем актёров к фильмам
+INSERT INTO FilmActors (film_id, actor_id) VALUES
+(1, 1), -- Доминик Морел — Забавные игры
+(2, 2), -- Роберт Шинн — Субмарина
+(3, 3), -- Каролин Дюбюк — Мечтатели
+(4, 4); -- Фредерик Беизи — Господин Никто
+
+-- Привязываем актёров к сценам
+INSERT INTO SceneActors (scene_id, actor_id) VALUES
+(1, 1), -- Доминик Морел — сцена 1 фильма "Забавные игры"
+(2, 2), -- Роберт Шинн — сцена 1 фильма "Субмарина"
+(3, 3), -- Каролин Дюбюк — сцена 1 фильма "Мечтатели"
+(4, 4); -- Фредерик Беизи — сцена 1 фильма "Господин Никто"
+
+SELECT name, genre, release_year, budget FROM Films ORDER BY release_year DESC;
+
+SELECT F.name AS film_name, A.full_name AS actor_name, A.country, A.birth_date
+FROM FilmActors FA
+JOIN Films F ON FA.film_id = F.film_id
+JOIN Actors A ON FA.actor_id = A.actor_id
+ORDER BY F.name, A.full_name;
+
+SELECT S.scene_number, S.description, S.duration_minutes, F.name AS film_name
+FROM Scenes S
+JOIN Films F ON S.film_id = F.film_id
+ORDER BY F.name, S.scene_number;
+
+SELECT SA.scene_id, S.description, A.full_name AS actor_name
+FROM SceneActors SA
+JOIN Scenes S ON SA.scene_id = S.scene_id
+JOIN Actors A ON SA.actor_id = A.actor_id
+ORDER BY SA.scene_id, A.full_name;
