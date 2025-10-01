@@ -1,0 +1,147 @@
+USE master;
+GO
+
+ALTER DATABASE Library SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('Library') IS NOT NULL
+    DROP DATABASE Library;
+GO
+
+CREATE DATABASE Library;
+GO
+
+USE Library;
+GO
+
+IF OBJECT_ID('BookAuthors', 'U') IS NOT NULL DROP TABLE BookAuthors;
+IF OBJECT_ID('BookLoans', 'U') IS NOT NULL DROP TABLE BookLoans;
+IF OBJECT_ID('Books', 'U') IS NOT NULL DROP TABLE Books;
+IF OBJECT_ID('Readers', 'U') IS NOT NULL DROP TABLE Readers;
+IF OBJECT_ID('Authors', 'U') IS NOT NULL DROP TABLE Authors;
+GO
+
+CREATE TABLE Authors (
+    author_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    country NVARCHAR(100) NULL,
+    birth_year INT NULL,
+    death_year INT NULL
+);
+GO
+
+CREATE TABLE Books (
+    book_id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(250) NOT NULL,
+    isbn NVARCHAR(20) NOT NULL UNIQUE,
+    publication_year INT NOT NULL
+);
+GO
+
+CREATE TABLE BookAuthors (
+    book_id INT NOT NULL,
+    author_id INT NOT NULL,
+    PRIMARY KEY (book_id, author_id),
+    FOREIGN KEY (book_id) REFERENCES Books(book_id),
+    FOREIGN KEY (author_id) REFERENCES Authors(author_id)
+);
+GO
+
+CREATE TABLE Readers (
+    reader_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    phone NVARCHAR(20) NOT NULL,
+    registration_date DATE NOT NULL DEFAULT GETDATE()
+);
+GO
+
+CREATE TABLE BookLoans (
+    loan_id INT IDENTITY(1,1) PRIMARY KEY,
+    reader_id INT NOT NULL,
+    book_id INT NOT NULL,
+    loan_date DATE NOT NULL,
+    return_due_date DATE NOT NULL,
+    return_date DATE NULL,
+    FOREIGN KEY (reader_id) REFERENCES Readers(reader_id),
+    FOREIGN KEY (book_id) REFERENCES Books(book_id)
+);
+GO
+
+CREATE TRIGGER trg_CheckLoanLimit
+ON BookLoans
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @reader_id INT;
+
+    SELECT TOP 1 @reader_id = reader_id FROM inserted;
+
+    DECLARE @active_loans INT;
+    SELECT @active_loans = COUNT(*) FROM BookLoans WHERE reader_id = @reader_id AND return_date IS NULL;
+
+    -- Сколько пытаются добавить новых
+    DECLARE @new_loans INT;
+    SELECT @new_loans = COUNT(*) FROM inserted WHERE reader_id = @reader_id;
+
+    IF @active_loans + @new_loans > 5
+    BEGIN
+        RAISERROR('Превышен лимит по количеству невозвращенных книг (максимум 5)', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END
+
+    INSERT INTO BookLoans (reader_id, book_id, loan_date, return_due_date, return_date)
+    SELECT reader_id, book_id, loan_date, return_due_date, return_date FROM inserted;
+END;
+GO
+
+INSERT INTO Authors (full_name, country, birth_year, death_year) VALUES
+(N'Стивен Кинг', N'США', 1947, NULL),
+(N'Эдгар Аллан По', N'США', 1809, 1849),
+(N'Фридрих Ницше', N'Германия', 1844, 1900);
+GO
+
+INSERT INTO Books (title, isbn, publication_year) VALUES
+(N'Кэрри', N'978-0-307-74365-7', 1974),
+(N'Ворон', N'978-0-486-26628-5', 1845),
+(N('Так говорил Заратустра'), N'978-0-14-044118-3', 1883);
+GO
+
+INSERT INTO BookAuthors (book_id, author_id) VALUES
+(1, 1),
+(2, 2),
+(3, 3);
+GO
+
+INSERT INTO Readers (full_name, phone, registration_date) VALUES
+(N'Алиса Каренина', '+79161234567', '2025-01-10'),
+(N'Даниил Иванов', '+79261234567', '2025-02-20'),
+(N'Мария Петрова', '+79361234567', '2025-03-15');
+GO
+
+INSERT INTO BookLoans (reader_id, book_id, loan_date, return_due_date, return_date) VALUES
+(1, 1, '2025-09-01', '2025-09-21', NULL),
+(1, 2, '2025-09-05', '2025-09-25', '2025-09-23'),
+(2, 3, '2025-09-10', '2025-09-30', NULL);
+GO
+
+SELECT B.title, B.isbn, B.publication_year, A.full_name AS author_name
+FROM Books B
+JOIN BookAuthors BA ON B.book_id = BA.book_id
+JOIN Authors A ON BA.author_id = A.author_id
+ORDER BY B.title;
+
+SELECT R.full_name, R.phone, COUNT(BL.loan_id) AS active_loans
+FROM Readers R
+LEFT JOIN BookLoans BL ON R.reader_id = BL.reader_id AND BL.return_date IS NULL
+GROUP BY R.reader_id, R.full_name, R.phone
+ORDER BY active_loans DESC;
+
+SELECT R.full_name AS reader_name, B.title AS book_title, BL.loan_date, BL.return_due_date,
+       CASE WHEN BL.return_date IS NULL THEN 'Не возвращена' ELSE 'Возвращена' END AS return_status
+FROM BookLoans BL
+JOIN Readers R ON BL.reader_id = R.reader_id
+JOIN Books B ON BL.book_id = B.book_id
+ORDER BY BL.loan_date DESC;
